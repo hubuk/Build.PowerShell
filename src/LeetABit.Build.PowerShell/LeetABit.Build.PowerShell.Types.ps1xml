@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Types>
+
+  <Type>
+    <Name>Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.DiagnosticRecord</Name>
+    <Members>
+      <ScriptProperty>
+        <Name>RelativeScriptPath</Name>
+        <GetScriptBlock>
+          Resolve-RelativePath -Path $this.ScriptPath -Base (LeetABit.Build.Arguments\Find-CommandArgument -ParameterName 'ArtifactsRoot')
+        </GetScriptBlock>
+      </ScriptProperty>
+    </Members>
+  </Type>
+</Types>

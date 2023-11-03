@@ -1,0 +1,7 @@
+{
+    "$schema": "..\\..\\Build\\schema\\LeetABit.Build.schema.json",
+    "ToolsetLocation": "..\\Build\\src",
+    "ExtensionModule": [
+      "src\\LeetABit.Build.PowerShell"
+    ]
+}
