@@ -12,7 +12,7 @@
     RootModule = 'LeetABit.Build.PowerShell.psm1'
 
     # Version number of this module.
-    ModuleVersion = '0.0.0'
+    ModuleVersion = '0.1.1'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -52,8 +52,8 @@
 
     # Modules that must be imported into the global environment prior to importing this module
     RequiredModules = @(
-        @{ModuleName = 'LeetABit.Build.Common'; ModuleVersion = '0.0.1'; },
-        @{ModuleName = 'LeetABit.Build.Logging'; ModuleVersion = '0.0.1'; }
+        @{ModuleName = 'LeetABit.Build.Common'; ModuleVersion = '0.0.5'; },
+        @{ModuleName = 'LeetABit.Build.Logging'; ModuleVersion = '0.0.5'; }
     )
 
     # Assemblies that must be loaded prior to importing this module
@@ -106,15 +106,21 @@
     # ModuleList = @()
 
     # List of all files packaged with this module
-    FileList = @('LeetABit.Build.PowerShell.psm1',
-                 'LeetABit.Build.PowerShell.AnalysisRules.ps1',
-                 'LeetABit.Build.PowerShell.Resources.psd1',
-                 'LeetABit.Build.PowerShell.Format.ps1xml')
+    FileList = @(
+        'LeetABit.Build.PowerShell.AnalysisRules.ps1'
+        'LeetABit.Build.PowerShell.Format.ps1xml'
+        'LeetABit.Build.PowerShell.psm1'
+        'LeetABit.Build.PowerShell.Resources.psd1'
+        'LeetABit.Build.PowerShell.Types.ps1xml'
+    )
 
     # Private data to pass to the module specified in RootModule/ModuleToProcess. This may also contain a PSData hashtable with additional module metadata used by PowerShell.
     PrivateData = @{
 
         PSData = @{
+
+            # Prerelease version information.
+            Prerelease = '-alpha40'
 
             # Tags applied to this module. These help with module discovery in online galleries.
             Tags = @('LeetABit', 'Build', 'PowerShell')
@@ -130,7 +136,11 @@
 
             # ReleaseNotes of this module
             ReleaseNotes = @"
-- Initial release
+# 0.1.1 - 2023-11-04
+
+    wip
+    Initial commit.
+
 "@
 
             # External dependencies.

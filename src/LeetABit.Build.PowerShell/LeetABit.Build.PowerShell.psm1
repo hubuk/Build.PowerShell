@@ -1,11 +1,13 @@
 #requires -version 6
-using module LeetABit.Build.Common
 using namespace System
 using namespace System.Collections
+using namespace System.Collections.Generic
+using namespace System.IO
 using namespace System.Management.Automation
 using namespace System.Management.Automation.Language
 using namespace System.Security.Cryptography.X509Certificates
 using namespace Microsoft.PowerShell.Commands
+using module LeetABit.Build.Common
 
 Set-StrictMode -Version 3.0
 Import-LocalizedData -BindingVariable LocalizedData -FileName LeetABit.Build.PowerShell.Resources.psd1
@@ -56,7 +58,39 @@ LeetABit.Build.Extensibility\Register-BuildTask "clean" {
     }
 }
 
-LeetABit.Build.Extensibility\Register-BuildTask "build" {
+LeetABit.Build.Extensibility\Register-BuildTask "codegen" -Initialization {
+    param(
+        [String]
+        $SourceRoot
+    )
+
+    process {
+        Initialize-CodeGenTask -SourceRoot $SourceRoot
+    }
+} {
+    param(
+        [String]
+        $ProjectPath,
+
+        [String]
+        $SourceRoot,
+
+        [String]
+        $Version,
+
+        [String]
+        $PrereleaseVersion,
+
+        [String[]]
+        $ReleaseNotes
+    )
+
+    process {
+        Write-ProjectProperties -ProjectPath $ProjectPath -SourceRoot $SourceRoot -Version $Version -PrereleaseVersion $PrereleaseVersion -ReleaseNotes $ReleaseNotes
+    }
+}
+
+LeetABit.Build.Extensibility\Register-BuildTask "build" "codegen", {
     <#
     .SYNOPSIS
         Builds artifacts for the specified project.
@@ -234,7 +268,7 @@ LeetABit.Build.Extensibility\Register-BuildTask "docgen" {
     )
 
     process {
-        Read-ReferenceDocumentation -ProjectPath $ProjectPath -SourceRoot $SourceRoot -ArtifactsRoot $ArtifactsRoot -ReferenceDocsRoot $ReferenceDocsRoot
+        Write-ReferenceDocumentation -ProjectPath $ProjectPath -SourceRoot $SourceRoot -ArtifactsRoot $ArtifactsRoot -ReferenceDocsRoot $ReferenceDocsRoot
     }
 }
 
@@ -1127,8 +1161,318 @@ function Publish-Project {
     }
 }
 
+function Initialize-CodeGenTask {
+    param(
+        [String]
+        $SourceRoot
+    )
 
-function Read-ReferenceDocumentation {
+    process {
+        # ? current task name?
+
+        $version = Get-GitSemVer -Version1 -NoPreRelease
+        $prereleaseVersion = (Get-GitSemVer -Version1).Substring($version.Length)
+        $releaseNotes = Get-GitReleaseNotes
+        LeetABit.Build.Arguments\Add-CommandArgument -ParameterName 'LeetABitBuildPowerShell_Version' -ParameterValue $version
+        LeetABit.Build.Arguments\Add-CommandArgument -ParameterName 'LeetABitBuildPowerShell_PrereleaseVersion' -ParameterValue $prereleaseVersion
+        LeetABit.Build.Arguments\Add-CommandArgument -ParameterName 'LeetABitBuildPowerShell_ReleaseNotes' -ParameterValue $releaseNotes
+    }
+}
+
+function Write-ProjectProperties {
+    param(
+        [String]
+        $ProjectPath,
+        [String]
+        $SourceRoot,
+        [String]
+        $Version,
+        [String]
+        $PrereleaseVersion,
+        [String[]]
+        $ReleaseNotes
+    )
+
+    process {
+        $TaskName = LeetABit.Build.Arguments\Find-CommandArgument -ParameterName 'TaskName' -DefaultValue 'codegen'
+        $projects = Resolve-Project $SourceRoot 'LeetABit.Build.Repository' $TaskName
+        $modules = $projects | Where-Object { ($_[1] -eq 'LeetABit.Build.PowerShell') -and (Test-Path $_[0] -PathType Container)} | ForEach-Object { Split-Path $_[0] -Leaf }
+
+        $projectItem = Get-Item $ProjectPath
+        $manifestPath = Join-Path $projectItem.FullName "$($projectItem.BaseName).psd1"
+        if (Test-Path $manifestPath -PathType Leaf) {
+            $content = [List[String]](Get-Content $manifestPath)
+
+            if (Test-Path $ProjectPath -PathType Container) {
+                $scriptsPath = Join-Path $ProjectPath 'Scripts'
+                $files = Get-ChildItem -Path $ProjectPath -File -Recurse |
+                        Foreach-Object { $_.FullName } |
+                        Where-Object { $_ -ne $manifestPath } |
+                        ForEach-Object { "        '$(Resolve-RelativePath $_ $ProjectPath)'" }
+                if ((Test-Path $scriptsPath -PathType Container) -and (Get-ChildItem -Path $scriptsPath -File)) {
+                    $functions = @()
+                    $lines = @()
+                    $directories = [Stack]@($scriptsPath)
+
+                    while ($directories.Count -gt 0) {
+                        $directory = $directories.Pop()
+                        $relative = Resolve-RelativePath $directory $scriptsPath
+                        $depth = if ($relative -eq '.') { 0 } else { $relative.Split([Path]::DirectorySeparatorChar).Count }
+                        $subdirectoryName = [Path]::GetFileName($directory)
+                        $lines += "$("    " * ($depth + 2))# $subdirectoryName"
+
+                        Get-ChildItem $directory -File | ForEach-Object {
+                            $relaativePath = Resolve-RelativePath $_.FullName $ProjectPath
+                            $lines += "$("    " * ($depth + 2))'.$([Path]::DirectorySeparatorChar)$relaativePath'"
+                            $fileName = [Path]::GetFileNameWithoutExtension($relaativePath)
+                            if ($subdirectoryName -ne 'Private' -and $fileName.Contains('-')) {
+                                $functions += "        '$fileName'"
+                            }
+                        }
+
+                        $subdirectories = @(Get-ChildItem $directory -Directory)
+                        [array]::Reverse($subdirectories)
+                        $subdirectories | ForEach-Object {
+                            $directories.Push($_.FullName)
+                        }
+                    }
+
+                    $content = Update-MultilineProperty -lines $content -BeginingPattern '    NestedModules = @(' -EndPattern '    )' -Content $lines
+
+                    $content = Update-MultilineProperty -lines $content -BeginingPattern '    FunctionsToExport = @(' -EndPattern '    )' -Content $functions
+                }
+
+                $content = Update-MultilineProperty -lines $content -BeginingPattern '    FileList = @(' -EndPattern '    )' -Content $files
+
+                $content = Update-MultilineProperty -lines $content -BeginingPattern '            ReleaseNotes = @"' -EndPattern '"@' -Content $ReleaseNotes
+
+                for ($i = 0; $i -lt $content.Count; $i = $i + 1) {
+                    if ($PrereleaseVersion) {
+                        $content = $content -replace "^(\s+)Prerelease = '[^']*'", "`$1Prerelease = '$PrereleaseVersion'"
+                    }
+                    $content = $content -replace "^(\s+)ModuleVersion = '\d+\.\d+\.\d+'", "`$1ModuleVersion = '$Version'"
+                    $modules | ForEach-Object {
+                        $content = $content -replace "@{ModuleName = '$_'; ModuleVersion = '\d+.\d+.\d+'; }", "@{ModuleName = '$_'; ModuleVersion = '$Version'; }"
+                    }
+                }
+
+                $content | Out-File $manifestPath
+            }
+        }
+    }
+}
+
+function Update-MultilineProperty {
+    param (
+        [List[String]]
+        $lines,
+
+        [String]
+        $BeginingPattern,
+
+        [String]
+        $EndPattern,
+
+        [String[]]
+        $Content
+    )
+
+    process {
+        $start = $lines.IndexOf($BeginingPattern)
+        if ($start -ge 0) {
+            $end = $lines.IndexOf($EndPattern, $start)
+            if ($end -ge 0) {
+                $lines.RemoveRange($start + 1, $end - $start - 1)
+                $lines.InsertRange($start + 1, $Content)
+            }
+        }
+
+        $lines
+    }
+}
+
+function Get-GitReleaseNotes {
+    param(
+        [String]
+        $TagPattern = "()"
+    )
+
+    process {
+        $TagPattern = $TagPattern -replace '\(\)', '([0-9]+)\.([0-9]+)\.([0-9]+)'
+        $result = @()
+        $commits = git rev-list HEAD
+        $recent = $null
+
+        foreach ($commit in $commits) {
+            $tagName = Invoke-Expression "git describe --tags --abbrev=0 $commit --always"
+            $version = if ($tagName -match $TagPattern) {
+                $tagName
+            } else {
+                $version
+            }
+
+            $date = Invoke-Expression "git show -s --format=%cd --date=short $commit"
+            $message = Invoke-Expression "git show -s --format=%s $commit"
+
+            if (-not $recent -or -not $recent.ContainsKey('version') -or $recent.version -ne $version) {
+                $recent = @{
+                    version = $version
+                    date = $date
+                    message = @()
+                }
+
+                $result += $recent
+            }
+
+            $recent.message += $message
+        }
+
+        $result | ForEach-Object {
+            "# $($_.version) - $($_.date)"
+            ""
+            $_.message | ForEach-Object {
+                "    $_"
+            }
+            ""
+        }
+    }
+}
+
+function Get-GitSemVer {
+    param(
+        [Switch]
+        $NoBranch,
+        [Switch]
+        $NoHash,
+        [Switch]
+        $NoTimestamp,
+        [Switch]
+        $NoLocal,
+        [Switch]
+        $NoPreRelease,
+        [Switch]
+        $SingleStep,
+        [String]
+        $TagPattern = "()",
+        [String]
+        $MajorPattern = "^Breaking:",
+        [String]
+        $MinorPattern = "^Feature:",
+        [Switch]
+        $Version1
+    )
+
+    process {
+        $major = 0
+	    $minor = 1
+	    $patch = 0
+
+        $lastVersionedCommit = git describe --tags --abbrev=0 --match '?*.?*.?*' --always
+        $TagPattern = $TagPattern -replace '\(\)', '([0-9]+)\.([0-9]+)\.([0-9]+)'
+
+        if ($lastVersionedCommit -match $TagPattern) {
+            Write-Verbose "Version tag has been found: $lastVersionedCommit."
+            $major=$matches[1]
+            $minor=$matches[2]
+            $patch=$matches[3]
+        } else {
+            Write-Verbose 'Version tag has not been found.'
+            $lastVersionedCommit = git rev-list --max-parents=0 HEAD
+        }
+
+        Write-Verbose "Last versioned commit: $lastVersionedCommit"
+        $commits = Invoke-Expression "git rev-list $lastVersionedCommit..HEAD --reverse"
+
+
+        $commits | ForEach-Object {
+            $changes = 0
+            Write-Verbose "Analyzing commit $_"
+            $show = Invoke-Expression "git show -s --format=%s $_"
+            if ($show -match $MajorPattern) {
+                $changes = 3
+            } elseif ($show -match $MinorPattern) {
+                if ($changes -lt 2) {
+                    $changes = 2
+                }
+            } else {
+                if ($changes -lt 1) {
+                    $changes = 1
+                }
+            }
+
+            if (-not $SingleStep) {
+                if ($changes -eq 3) {
+                    $major = [int]$major + 1
+                    $minor = 0
+                    $patch = 0
+                } elseif ($changes -eq 2) {
+                    $minor = [int]$minor + 1
+                    $patch = 0
+                } elseif ($changes -eq 1) {
+                    $patch = [int]$patch + 1
+                }
+
+                $changes = 0
+            }
+        }
+
+        if ($SingleStep) {
+            if ($changes -eq 3) {
+                $major = [int]$major + 1
+                $minor = 0
+                $patch = 0
+            } elseif ($changes -eq 2) {
+                $minor = [int]$minor + 1
+                $patch = 0
+            } elseif ($changes -eq 1) {
+                $patch = [int]$patch + 1
+            }
+        }
+
+        $result = "$major.$minor.$patch"
+
+        if ($Version1) {
+            if (-not $NoPreRelease) {
+                $status = git status --porcelain
+                if ($status) {
+                    $result = "$result-alpha"
+                    if ($commits) {
+                        $result = "$result$($commits.Length)"
+                    }
+                } elseif ($commits) {
+                    $result = "$result-beta$($commits.Length)"
+                }
+            }
+        } else {
+            if (-not $NoPreRelease -and $commits) {
+                $result = "$result-beta.$($commits.Length)"
+            }
+
+            if (-not $NoLocal) {
+                $status = git status --porcelain
+                if ($status) {
+                    $result = "$result-local"
+                }
+            }
+
+            if (-not $NoBranch) {
+                $result = "$result+Branch.$(git rev-parse --abbrev-ref HEAD)"
+            }
+
+            if (-not $NoHash) {
+                $result="$result+Hash.$(git rev-parse HEAD)"
+            }
+
+            if (-not $NoTimestamp) {
+                $result="$result+Timestamp.$(Get-Date -Format 'DyyyyMMddTHHmmss.fffffff')"
+            }
+        }
+
+        $result
+    }
+}
+
+function Write-ReferenceDocumentation {
     param(
         [String]
         $ProjectPath,

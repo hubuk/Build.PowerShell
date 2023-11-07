@@ -1,3 +1,5 @@
+using namespace Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic
+
 function Measure-UseCommentBasedHelp {
     <#
     .SYNOPSIS
@@ -13,7 +15,7 @@ function Measure-UseCommentBasedHelp {
     .OUTPUTS
         [Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.DiagnosticRecord[]]
     #>
-    [OutputType([Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.DiagnosticRecord[]])]
+    [OutputType([DiagnosticRecord[]])]
 
     param (
         [Parameter(HelpMessage = "Provide script block's AST to analyze.",
@@ -25,15 +27,12 @@ function Measure-UseCommentBasedHelp {
 
     begin {
         $ruleName = $PSCmdlet.MyInvocation.MyCommand.Name.Replace('Measure-', '');
-        $module = LeetABit.Build.PowerShell\Get-ContainingModule ($ScriptBlockAst.GetScriptBlock())
-
     }
 
     process {
         $results = @()
         foreach ($functionAst in $ScriptBlockAst.FindAll((Get-Command Test-FunctionDefinition).ScriptBlock, $true)) {
             $functionWarnings = @()
-            #$functionWarnings += "Module: $($module)"
             $help = $functionAst.GetHelpContent()
             if (-not $help) {
                 $functionWarnings += "Function '$($functionAst.Name)' missing documentation comment block."
